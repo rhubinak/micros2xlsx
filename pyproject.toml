@@ -1,0 +1,29 @@
+[project]
+name = "micros2xlsx"
+version = "0.1.0"
+description = "Converts XML output from Horiba ABX Micros hematology analyzers into nice XLSX files"
+readme = "README.md"
+license = {text = "MIT License"}
+requires-python = ">=3.12"
+dependencies = [
+    "xlsxwriter>=3.2.0",
+]
+authors = [
+  {name = "Robert Hubinak", email = "rhubinak@tuta.io"},
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Repository = "https://github.com/rhubinak/micros2xlsx.git"
+"Bug Tracker" = "https://github.com/rhubinak/micros2xlsx/issues"
+Changelog = "https://github.com/rhubinak/micros2xlsx/blob/master/CHANGELOG.md"
+
+[tool.uv]
+dev-dependencies = [
+    "pre-commit>=3.8.0",
+    "ruff>=0.6.8",
+]

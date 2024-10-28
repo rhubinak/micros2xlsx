@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+
+import argparse
+from itertools import chain
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+from xlsxwriter import Workbook
+from xlsxwriter.exceptions import DuplicateWorksheetName, InvalidWorksheetName
+
+HEADER_ATTRS = [
+    "ANALYSIS_DATE",
+    "ANALYSIS_TYPE",
+    "FIELD_SID_ANIMAL_NAME",
+    "FIELD_SID_OWNER_FIRSTNAME",
+    "FIELD_SID_OWNER_LASTNAME",
+    "FIELD_SID_PATIENT_ID",
+    "FIELD_SID_PATIENT_LAST_NAME",
+    "FIELD_SID_PATIENT_SEX",
+    "FIELD_SID_SAMPLE_TYPE",
+    "FIELD_SID_SPECIES_ID",
+    "SAMPLING_MODE",
+    "TEMPERATURE",
+    "QCFailed",
+]
+
+
+def write_result(param, worksheet, row):
+    name = param.findall("./st[@n='Id']")[0].text
+    valid = param.findall("./b[@n='Valid']")[0].text == "1"
+    low_limit = param.findall("./d[@n='LowLimit']")[0].text
+    high_limit = param.findall("./d[@n='HighLimit']")[0].text
+    worksheet.write(row, 0, f"{name}{' (Invalid)' if not valid else ''}")
+    worksheet.write(row, 1, low_limit)
+    worksheet.write(row, 2, high_limit)
+    if valid:
+        value = param.findall("./*[@n='Raw']")[0].text
+        worksheet.write(row, 3, value)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog="micros2xlsx",
+        description="Converts XML output from Horiba ABX Micros hematology analyzers into nice XLSX files",
+    )
+    parser.add_argument(
+        "path",
+        help="Path to the Micros XML files (supports wildcards, can be specified multiple times, defaults to current directory)",
+        default=".",
+        nargs="*",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Name of the output file (default output.xlsx)",
+        default="output.xlsx",
+    )
+    args = parser.parse_args()
+
+    # Gather path args into a list
+    if args.path == ".":
+        xml_files = list(Path(".").glob("*.xml"))
+    else:
+        xml_dirs = [path for path in args.path if Path(path).is_dir()]
+        xml_glob_files = list(
+            chain.from_iterable(Path(xml_dir).glob("*.xml") for xml_dir in xml_dirs)
+        )
+        xml_single_files = [
+            Path(path)
+            for path in args.path
+            if Path(path).is_file() and Path(path).suffix == ".xml"
+        ]
+        xml_files = set(xml_glob_files + xml_single_files)
+
+    if not xml_files:
+        sys.exit(f"No XML files found in provided paths {args.path}")
+
+    print("Found XML files to process:")
+    print("\n".join(str(xml_file) for xml_file in xml_files))
+
+    # Create a new XLSX file and add a worksheet
+    with Workbook(args.output) as workbook:
+        bold = workbook.add_format({"bold": True})
+        bold_center = workbook.add_format({"bold": True, "align": "center"})
+        for xml_file in xml_files:
+            row_chart = 0
+            col = 6
+            print(f"Processing {xml_file}")
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
+
+            # Skip test runs
+            if root.findall("./st[@n='OPERATOR']")[0].text == "tech":
+                continue
+
+            # Skip failed runs
+            if root.findall("./b[@n='QCFailed']")[0].text == "1":
+                continue
+
+            try:
+                worksheet = workbook.add_worksheet(xml_file.stem)
+            except (DuplicateWorksheetName, InvalidWorksheetName) as e:
+                print(e)
+                print(
+                    "Using default Excel convention for this one, i.e. Sheet1, Sheet2, etc"
+                )
+                worksheet = workbook.add_worksheet()
+
+            row = 0
+            for child in root:
+                if (attr := child.attrib.get("n")) in HEADER_ATTRS:
+                    worksheet.write(row, 0, attr.replace("FIELD_SID_", ""), bold)
+                    worksheet.write(row, 1, child.text)
+                    row += 1
+
+            row += 1
+            worksheet.write(row, 0, "Type", bold_center)
+            worksheet.write(row, 1, "Low limit", bold_center)
+            worksheet.write(row, 2, "High limit", bold_center)
+            worksheet.write(row, 3, "Value", bold_center)
+            row += 2
+
+            param_families = root.findall("./o[@t='SampleParametersFamily']")
+            for param_family in param_families:
+                param_family_name = param_family.attrib.get("n")
+                param_family_valid = (
+                    param_family.findall("./o[@n='FLAGS']/b[@n='QCFailed']")[0].text
+                    == "0"
+                )
+                worksheet.write(
+                    row,
+                    0,
+                    f"{param_family_name}{' (Invalid)' if not param_family_valid else ''}",
+                    bold_center,
+                )
+                row += 1
+
+                histogram = param_family.findall("./o[@n='HISTOGRAM']/st")[0].text
+
+                # Create a new Chart object
+                chart = workbook.add_chart({"type": "column"})
+
+                # Write some data to add to plot on the chart
+                data = [int(x) for x in histogram.split(";") if x]
+                worksheet.write_column(0, col, data)
+                worksheet.set_column(col, col, None, None, {"hidden": True})
+
+                # Configure the chart. In simplest case we add one or more data series
+                chart.add_series(
+                    {
+                        "values": [xml_file.stem, 0, col, len(data) - 1, col],
+                        "name": param_family_name,
+                    }
+                )
+
+                # Insert the chart into the worksheet
+                worksheet.insert_chart(row_chart, 6, chart)
+                row_chart += 20
+                col += 1
+
+                for child in param_family:
+                    if child.attrib.get("t") != "SampleParameterResult":
+                        continue
+                    write_result(child, worksheet, row)
+                    row += 1
+                row += 1
+
+            worksheet.autofit()
